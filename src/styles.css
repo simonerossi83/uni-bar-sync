@@ -159,5 +159,45 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
+    font-family: var(--font-body);
   }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+  }
+}
+
+/* Kitchen dashboard: dark, high-contrast surface for a shared big screen */
+.kitchen {
+  --background: oklch(0.19 0.02 55);
+  --foreground: oklch(0.97 0.01 85);
+  --card: oklch(0.25 0.025 55);
+  --card-foreground: oklch(0.97 0.01 85);
+  --muted: oklch(0.3 0.02 55);
+  --muted-foreground: oklch(0.78 0.02 70);
+  --border: oklch(1 0 0 / 12%);
+  --secondary: oklch(0.3 0.02 55);
+  --secondary-foreground: oklch(0.97 0.01 85);
+  --accent: oklch(0.32 0.04 60);
+  --accent-foreground: oklch(0.97 0.01 85);
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+
+@utility animate-pop-in {
+  animation: pop-in 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes ready-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+}
+
+@utility animate-ready-pulse {
+  animation: ready-pulse 1.6s ease-in-out infinite;
 }
