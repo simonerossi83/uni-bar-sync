@@ -88,9 +88,11 @@ function OrderPage() {
         </div>
 
         {isReady && (
-          <div className="animate-ready-pulse rounded-3xl border-2 border-success bg-success/10 p-6 text-center">
+          <div className="animate-pop-in rounded-3xl border-2 border-success bg-success/10 p-6 text-center">
             <PartyPopper className="mx-auto size-10 text-success" />
-            <h1 className="mt-2 font-display text-3xl font-black">Il tuo ordine è pronto!</h1>
+            <h1 className="animate-ready-pulse mt-2 font-display text-3xl font-black">
+              Il tuo ordine è pronto!
+            </h1>
             <p className="mt-1 text-muted-foreground">Vai al bancone e ritira il tuo ordine.</p>
             <Button
               size="lg"
