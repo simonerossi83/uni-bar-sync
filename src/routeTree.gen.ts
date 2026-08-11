@@ -10,33 +10,53 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as CucinaRouteImport } from './routes/cucina'
+import { Route as OrdineOrderIdRouteImport } from './routes/ordine.$orderId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CucinaRoute = CucinaRouteImport.update({
+  id: '/cucina',
+  path: '/cucina',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OrdineOrderIdRoute = OrdineOrderIdRouteImport.update({
+  id: '/ordine/$orderId',
+  path: '/ordine/$orderId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/cucina': typeof CucinaRoute
+  '/ordine/$orderId': typeof OrdineOrderIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/cucina': typeof CucinaRoute
+  '/ordine/$orderId': typeof OrdineOrderIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/cucina': typeof CucinaRoute
+  '/ordine/$orderId': typeof OrdineOrderIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/cucina' | '/ordine/$orderId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/cucina' | '/ordine/$orderId'
+  id: '__root__' | '/' | '/cucina' | '/ordine/$orderId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  CucinaRoute: typeof CucinaRoute
+  OrdineOrderIdRoute: typeof OrdineOrderIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,22 +68,28 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/cucina': {
+      id: '/cucina'
+      path: '/cucina'
+      fullPath: '/cucina'
+      preLoaderRoute: typeof CucinaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ordine/$orderId': {
+      id: '/ordine/$orderId'
+      path: '/ordine/$orderId'
+      fullPath: '/ordine/$orderId'
+      preLoaderRoute: typeof OrdineOrderIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  CucinaRoute: CucinaRoute,
+  OrdineOrderIdRoute: OrdineOrderIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
