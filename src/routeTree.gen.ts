@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CucinaRouteImport } from './routes/cucina'
+import { Route as CucinaLoginRouteImport } from './routes/cucina_.login'
 import { Route as OrdineOrderIdRouteImport } from './routes/ordine.$orderId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -23,6 +24,11 @@ const CucinaRoute = CucinaRouteImport.update({
   path: '/cucina',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CucinaLoginRoute = CucinaLoginRouteImport.update({
+  id: '/cucina_/login',
+  path: '/cucina/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OrdineOrderIdRoute = OrdineOrderIdRouteImport.update({
   id: '/ordine/$orderId',
   path: '/ordine/$orderId',
@@ -32,30 +38,34 @@ const OrdineOrderIdRoute = OrdineOrderIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/cucina': typeof CucinaRoute
+  '/cucina/login': typeof CucinaLoginRoute
   '/ordine/$orderId': typeof OrdineOrderIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/cucina': typeof CucinaRoute
+  '/cucina/login': typeof CucinaLoginRoute
   '/ordine/$orderId': typeof OrdineOrderIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/cucina': typeof CucinaRoute
+  '/cucina_/login': typeof CucinaLoginRoute
   '/ordine/$orderId': typeof OrdineOrderIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/cucina' | '/ordine/$orderId'
+  fullPaths: '/' | '/cucina' | '/cucina/login' | '/ordine/$orderId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/cucina' | '/ordine/$orderId'
-  id: '__root__' | '/' | '/cucina' | '/ordine/$orderId'
+  to: '/' | '/cucina' | '/cucina/login' | '/ordine/$orderId'
+  id: '__root__' | '/' | '/cucina' | '/cucina_/login' | '/ordine/$orderId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   CucinaRoute: typeof CucinaRoute
+  CucinaLoginRoute: typeof CucinaLoginRoute
   OrdineOrderIdRoute: typeof OrdineOrderIdRoute
 }
 
@@ -75,6 +85,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CucinaRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/cucina_/login': {
+      id: '/cucina_/login'
+      path: '/cucina/login'
+      fullPath: '/cucina/login'
+      preLoaderRoute: typeof CucinaLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ordine/$orderId': {
       id: '/ordine/$orderId'
       path: '/ordine/$orderId'
@@ -88,8 +105,19 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   CucinaRoute: CucinaRoute,
+  CucinaLoginRoute: CucinaLoginRoute,
   OrdineOrderIdRoute: OrdineOrderIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { startInstance } from './start.ts'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+  }
+}

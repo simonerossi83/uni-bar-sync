@@ -345,6 +345,30 @@ Continue developing this project in the [Lovable editor](https://lovable.dev/pro
 - **Stay in sync**: every change made in Lovable is committed straight to this repository.
 - **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
 
+## Configurazione locale e sicurezza
+
+1. Mantieni le variabili Supabase pubbliche già presenti in `.env`.
+2. Copia le variabili solo server indicate in `.env.example` dentro `.env.local` e configura `SUPABASE_SERVICE_ROLE_KEY` con la service-role key del progetto Supabase. Non usare mai il prefisso `VITE_` per questa chiave o per le credenziali cucina.
+3. Applica tutte le migration Supabase con `npx supabase db push` al progetto collegato.
+4. Avvia l'app con `npm run dev`.
+
+L'accesso cucina è disponibile esclusivamente all'URL `/cucina/login`. Le credenziali e il segreto di sessione devono restare in variabili server; `.env.local` è ignorato da Git.
+
+In produzione `KITCHEN_PASSWORD` deve essere diversa dalla password iniziale e contenere almeno 16 caratteri. I tentativi di login e la creazione degli ordini sono soggetti a rate limit distribuito su Supabase; le risposte della cucina, degli ordini e delle funzioni server usano `Cache-Control: no-store` e tutte le pagine negano l'incorporamento in iframe.
+
+La dashboard cucina avanza automaticamente gli ordini ogni 10 secondi, ma permette anche di anticipare manualmente lo stato oppure di rimettere un ordine pronto in preparazione. Il magazzino parte da 20 unità per prodotto, scala le quantità in modo atomico alla creazione degli ordini e può essere riportato alle quantità iniziali con il comando autenticato “Ripristina scorte”.
+
+## Capacità e concorrenza
+
+L'applicazione è configurata per circa 300 utenti contemporanei anche sul piano gratuito Supabase:
+
+- il menu passa attraverso una cache server di 2 secondi con deduplicazione delle richieste simultanee;
+- lo stato cliente usa un payload minimo e polling adattivo con jitter, sospeso nelle schede in background;
+- il dettaglio dell'ordine viene riutilizzato dalla risposta di creazione e ricaricato soltanto dopo un vero refresh;
+- ogni creazione usa un identificativo idempotente, quindi retry e doppi click non duplicano ordine o consumo scorte;
+- l'avanzamento ogni 10 secondi è eseguito da Supabase Cron ed è indipendente dai browser della cucina;
+- gli indici parziali mantengono veloci dashboard e batch anche quando crescono gli ordini archiviati.
+
 ## Development
 
 Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).

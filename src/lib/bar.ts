@@ -1,6 +1,5 @@
-import { useEffect } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
 
 export type OrderStatus = "received" | "preparing" | "ready" | "picked_up";
 
@@ -11,6 +10,8 @@ export type MenuItem = {
   price: number;
   category: string;
   available: boolean;
+  initial_stock: number;
+  stock_quantity: number;
   sort_order: number;
 };
 
@@ -30,10 +31,18 @@ export type Order = {
   total: number;
   created_at: string;
   updated_at: string;
+  estimated_ready_at: string | null;
+  archived_at: string | null;
   order_items?: OrderItem[];
 };
 
+export type OrderStatusSnapshot = Pick<
+  Order,
+  "id" | "status" | "updated_at" | "estimated_ready_at" | "archived_at"
+>;
+
 export const CATEGORIES = ["Caffetteria", "Bevande", "Panini", "Snack", "Dolci"] as const;
+export const MAX_ORDER_QUANTITY = 30;
 
 export const STATUS_LABEL: Record<OrderStatus, string> = {
   received: "Ordine ricevuto",
@@ -48,102 +57,173 @@ export const formatPrice = (value: number) =>
 export const formatTime = (iso: string) =>
   new Date(iso).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
 
-export async function fetchMenu(): Promise<MenuItem[]> {
-  const { data, error } = await supabase
-    .from("menu_items")
-    .select("*")
-    .order("category")
-    .order("sort_order");
-  if (error) throw error;
-  return (data ?? []) as MenuItem[];
-}
+const uuidSchema = z.string().uuid();
+const createOrderSchema = z
+  .object({
+    requestId: uuidSchema,
+    lines: z
+      .array(z.object({ menuItemId: uuidSchema, quantity: z.number().int().min(1).max(20) }))
+      .min(1)
+      .max(50),
+    note: z.string().max(500),
+  })
+  .superRefine((value, context) => {
+    const totalQuantity = value.lines.reduce((sum, line) => sum + line.quantity, 0);
+    if (totalQuantity > MAX_ORDER_QUANTITY) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["lines"],
+        message: `Un ordine non può contenere più di ${MAX_ORDER_QUANTITY} prodotti`,
+      });
+    }
+  });
+const orderIdSchema = z.object({ orderId: uuidSchema });
+const kitchenStatusSchema = z.object({
+  orderId: uuidSchema,
+  status: z.enum(["preparing", "ready"]),
+});
+const availabilitySchema = z.object({ itemId: uuidSchema, available: z.boolean() });
+const loginSchema = z.object({
+  username: z.string().min(1).max(100),
+  password: z.string().min(1).max(200),
+});
 
-export async function fetchOrders(): Promise<Order[]> {
-  const { data, error } = await supabase
-    .from("orders")
-    .select("*, order_items(*)")
-    .order("order_number", { ascending: true });
-  if (error) throw error;
-  return (data ?? []) as Order[];
-}
+const createOrderServer = createServerFn({ method: "POST" })
+  .validator(createOrderSchema)
+  .handler(async ({ data }) => {
+    const { createCustomerOrder } = await import("@/lib/bar.server");
+    return createCustomerOrder(data);
+  });
 
-export async function fetchOrder(id: string): Promise<Order | null> {
-  const { data, error } = await supabase
-    .from("orders")
-    .select("*, order_items(*)")
-    .eq("id", id)
-    .maybeSingle();
-  if (error) throw error;
-  return (data as Order) ?? null;
+const fetchOrderServer = createServerFn({ method: "GET" })
+  .validator(orderIdSchema)
+  .handler(async ({ data }) => {
+    const { getCustomerOrder } = await import("@/lib/bar.server");
+    return getCustomerOrder(data.orderId);
+  });
+
+const fetchOrderStatusServer = createServerFn({ method: "GET" })
+  .validator(orderIdSchema)
+  .handler(async ({ data }) => {
+    const { getCustomerOrderStatus } = await import("@/lib/bar.server");
+    return getCustomerOrderStatus(data.orderId);
+  });
+
+const pickupOrderServer = createServerFn({ method: "POST" })
+  .validator(orderIdSchema)
+  .handler(async ({ data }) => {
+    const { pickupCustomerOrder } = await import("@/lib/bar.server");
+    return pickupCustomerOrder(data.orderId);
+  });
+
+const fetchKitchenOrdersServer = createServerFn({ method: "GET" }).handler(async () => {
+  const { getKitchenOrders } = await import("@/lib/bar.server");
+  return getKitchenOrders();
+});
+
+const updateKitchenStatusServer = createServerFn({ method: "POST" })
+  .validator(kitchenStatusSchema)
+  .handler(async ({ data }) => {
+    const { updateKitchenOrderStatus } = await import("@/lib/bar.server");
+    return updateKitchenOrderStatus(data.orderId, data.status);
+  });
+
+const setItemAvailabilityServer = createServerFn({ method: "POST" })
+  .validator(availabilitySchema)
+  .handler(async ({ data }) => {
+    const { updateMenuItemAvailability } = await import("@/lib/bar.server");
+    return updateMenuItemAvailability(data.itemId, data.available);
+  });
+
+const resetOrdersServer = createServerFn({ method: "POST" }).handler(async () => {
+  const { archiveKitchenOrders } = await import("@/lib/bar.server");
+  return archiveKitchenOrders();
+});
+
+const restoreInventoryServer = createServerFn({ method: "POST" }).handler(async () => {
+  const { restoreMenuStock } = await import("@/lib/bar.server");
+  return restoreMenuStock();
+});
+
+const kitchenAuthStatusServer = createServerFn({ method: "GET" }).handler(async () => {
+  const { isKitchenAuthenticated } = await import("@/lib/kitchen-auth.server");
+  return { authenticated: await isKitchenAuthenticated() };
+});
+
+const kitchenLoginServer = createServerFn({ method: "POST" })
+  .validator(loginSchema)
+  .handler(async ({ data }) => {
+    const { loginKitchen } = await import("@/lib/kitchen-auth.server");
+    return { authenticated: await loginKitchen(data.username, data.password) };
+  });
+
+const kitchenLogoutServer = createServerFn({ method: "POST" }).handler(async () => {
+  const { logoutKitchen } = await import("@/lib/kitchen-auth.server");
+  await logoutKitchen();
+  return { authenticated: false };
+});
+
+const fetchMenuServer = createServerFn({ method: "GET" }).handler(async () => {
+  const { getPublicMenu } = await import("@/lib/bar.server");
+  return getPublicMenu();
+});
+
+export function fetchMenu(): Promise<MenuItem[]> {
+  return fetchMenuServer();
 }
 
 export type CartLine = { item: MenuItem; quantity: number };
 
-export async function createOrder(lines: CartLine[], note: string): Promise<Order> {
-  const total = lines.reduce((sum, l) => sum + l.item.price * l.quantity, 0);
-  const { data: order, error } = await supabase
-    .from("orders")
-    .insert({ note: note.trim() || null, total, status: "received" })
-    .select()
-    .single();
-  if (error || !order) throw error ?? new Error("Ordine non creato");
-
-  const { error: itemsError } = await supabase.from("order_items").insert(
-    lines.map((l) => ({
-      order_id: order.id,
-      menu_item_id: l.item.id,
-      name: l.item.name,
-      unit_price: l.item.price,
-      quantity: l.quantity,
-    })),
-  );
-  if (itemsError) throw itemsError;
-  return order as Order;
+export function createOrder(lines: CartLine[], note: string, requestId: string) {
+  return createOrderServer({
+    data: {
+      requestId,
+      lines: lines.map((line) => ({ menuItemId: line.item.id, quantity: line.quantity })),
+      note,
+    },
+  });
 }
 
-export async function setOrderStatus(id: string, status: OrderStatus) {
-  const { error } = await supabase.from("orders").update({ status }).eq("id", id);
-  if (error) throw error;
+export function fetchOrder(orderId: string) {
+  return fetchOrderServer({ data: { orderId } });
 }
 
-export async function setItemAvailability(id: string, available: boolean) {
-  const { error } = await supabase.from("menu_items").update({ available }).eq("id", id);
-  if (error) throw error;
+export function fetchOrderStatus(orderId: string) {
+  return fetchOrderStatusServer({ data: { orderId } });
 }
 
-/** Kitchen batch: preparing -> ready, then received -> preparing. */
-export async function runKitchenBatch() {
-  const { error: readyError } = await supabase
-    .from("orders")
-    .update({ status: "ready" })
-    .eq("status", "preparing");
-  if (readyError) throw readyError;
-  const { error: prepError } = await supabase
-    .from("orders")
-    .update({ status: "preparing" })
-    .eq("status", "received");
-  if (prepError) throw prepError;
+export function pickupOrder(orderId: string) {
+  return pickupOrderServer({ data: { orderId } });
 }
 
-/** Subscribe to realtime changes and refresh the given query keys. */
-export function useBarRealtime(keys: string[][]) {
-  const queryClient = useQueryClient();
-  const signature = JSON.stringify(keys);
+export function fetchOrders() {
+  return fetchKitchenOrdersServer();
+}
 
-  useEffect(() => {
-    const invalidate = () => {
-      for (const key of JSON.parse(signature) as string[][]) {
-        queryClient.invalidateQueries({ queryKey: key });
-      }
-    };
-    const channel = supabase
-      .channel("bar-realtime-" + Math.random().toString(36).slice(2))
-      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, invalidate)
-      .on("postgres_changes", { event: "*", schema: "public", table: "order_items" }, invalidate)
-      .on("postgres_changes", { event: "*", schema: "public", table: "menu_items" }, invalidate)
-      .subscribe();
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [queryClient, signature]);
+export function setKitchenOrderStatus(orderId: string, status: "preparing" | "ready") {
+  return updateKitchenStatusServer({ data: { orderId, status } });
+}
+
+export function setItemAvailability(itemId: string, available: boolean) {
+  return setItemAvailabilityServer({ data: { itemId, available } });
+}
+
+export function resetOrders() {
+  return resetOrdersServer();
+}
+
+export function restoreInventory() {
+  return restoreInventoryServer();
+}
+
+export function getKitchenAuthStatus() {
+  return kitchenAuthStatusServer();
+}
+
+export function authenticateKitchen(username: string, password: string) {
+  return kitchenLoginServer({ data: { username, password } });
+}
+
+export function endKitchenSession() {
+  return kitchenLogoutServer();
 }

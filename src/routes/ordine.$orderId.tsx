@@ -1,17 +1,17 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { CheckCircle2, ChefHat, Clock, PartyPopper } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { CheckCircle2, ChefHat, Clock, PartyPopper, Timer } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
   STATUS_LABEL,
   fetchOrder,
+  fetchOrderStatus,
   formatPrice,
   formatTime,
-  setOrderStatus,
-  useBarRealtime,
+  pickupOrder,
   type OrderStatus,
 } from "@/lib/bar";
 
@@ -19,15 +19,7 @@ export const Route = createFileRoute("/ordine/$orderId")({
   head: () => ({
     meta: [
       { title: "Il tuo ordine — Bar Universitario" },
-      {
-        name: "description",
-        content: "Segui in tempo reale lo stato del tuo ordine al bar universitario.",
-      },
-      { property: "og:title", content: "Il tuo ordine — Bar Universitario" },
-      {
-        property: "og:description",
-        content: "Numero ordine, prodotti e stato aggiornato automaticamente fino al ritiro.",
-      },
+      { name: "description", content: "Segui in tempo reale lo stato del tuo ordine." },
     ],
   }),
   component: OrderPage,
@@ -35,22 +27,68 @@ export const Route = createFileRoute("/ordine/$orderId")({
 
 const STEPS: OrderStatus[] = ["received", "preparing", "ready", "picked_up"];
 
+function useOrderCountdown(estimatedReadyAt: string | null | undefined, active: boolean) {
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    if (!active || !estimatedReadyAt) {
+      setNow(null);
+      return;
+    }
+    const tick = () => setNow(Date.now());
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [active, estimatedReadyAt]);
+
+  if (!active || !estimatedReadyAt || now === null) return null;
+  const remainingSeconds = Math.max(
+    0,
+    Math.ceil((new Date(estimatedReadyAt).getTime() - now) / 1000),
+  );
+  if (remainingSeconds === 0) return "Quasi pronto";
+  const minutes = Math.floor(remainingSeconds / 60)
+    .toString()
+    .padStart(2, "0");
+  const seconds = (remainingSeconds % 60).toString().padStart(2, "0");
+  return minutes + ":" + seconds;
+}
+
 function OrderPage() {
   const { orderId } = Route.useParams();
+  const queryClient = useQueryClient();
   const [pickingUp, setPickingUp] = useState(false);
-  const { data: order, isLoading } = useQuery({
+  const pollingJitter = useMemo(() => Math.floor(Math.random() * 1_500), []);
+  const { data: baseOrder, isLoading } = useQuery({
     queryKey: ["order", orderId],
     queryFn: () => fetchOrder(orderId),
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
   });
-  useBarRealtime([["order", orderId]]);
+  const { data: liveStatus } = useQuery({
+    queryKey: ["order-status", orderId],
+    queryFn: () => fetchOrderStatus(orderId),
+    enabled: Boolean(baseOrder),
+    staleTime: 1_500,
+    refetchInterval: (query) => {
+      const snapshot = query.state.data;
+      if (!snapshot || snapshot.status === "picked_up") return false;
+      return snapshot.status === "preparing" ? 3_000 + pollingJitter : 4_500 + pollingJitter;
+    },
+    refetchIntervalInBackground: false,
+  });
+  const order = baseOrder && liveStatus ? { ...baseOrder, ...liveStatus } : baseOrder;
+  const countdown = useOrderCountdown(order?.estimated_ready_at, order?.status === "preparing");
 
   if (isLoading) {
-    return <p className="p-10 text-center text-muted-foreground">Carico l'ordine…</p>;
+    return <p className="p-10 text-center text-muted-foreground">Carico l&apos;ordine…</p>;
   }
   if (!order) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
         <h1 className="font-display text-2xl font-bold">Ordine non trovato</h1>
+        <p className="max-w-sm text-sm text-muted-foreground">
+          Questo ordine non appartiene alla sessione corrente oppure non esiste.
+        </p>
         <Button asChild>
           <Link to="/">Torna al menu</Link>
         </Button>
@@ -58,14 +96,19 @@ function OrderPage() {
     );
   }
 
+  const isPreparing = order.status === "preparing";
   const isReady = order.status === "ready";
   const isPickedUp = order.status === "picked_up";
   const stepIndex = STEPS.indexOf(order.status);
 
   const pickup = async () => {
+    if (pickingUp || !isReady) return;
     setPickingUp(true);
     try {
-      await setOrderStatus(order.id, "picked_up");
+      const updated = await pickupOrder(order.id);
+      queryClient.setQueryData(["order", orderId], updated);
+      queryClient.setQueryData(["order-status", orderId], updated);
+      toast.success("Ritiro confermato");
     } catch {
       toast.error("Non è stato possibile confermare il ritiro. Riprova.");
     } finally {
@@ -87,20 +130,35 @@ function OrderPage() {
           </p>
         </div>
 
+        {isPreparing && (
+          <div className="animate-pop-in rounded-3xl border-2 border-warning bg-warning/15 p-6 text-center">
+            <Timer className="mx-auto size-10 text-warning" />
+            <h1 className="mt-2 font-display text-2xl font-black">In preparazione</h1>
+            <p className="mt-3 font-display text-5xl font-black tabular-nums">
+              {countdown ?? "--:--"}
+            </p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {countdown === "Quasi pronto"
+                ? "La cucina sta completando il tuo ordine."
+                : "Tempo stimato al completamento"}
+            </p>
+          </div>
+        )}
+
         {isReady && (
           <div className="animate-pop-in rounded-3xl border-2 border-success bg-success/10 p-6 text-center">
             <PartyPopper className="mx-auto size-10 text-success" />
             <h1 className="animate-ready-pulse mt-2 font-display text-3xl font-black">
-              Il tuo ordine è pronto!
+              Il tuo ordine è pronto per il ritiro
             </h1>
-            <p className="mt-1 text-muted-foreground">Vai al bancone e ritira il tuo ordine.</p>
+            <p className="mt-1 text-muted-foreground">Vai al bancone e mostra il numero ordine.</p>
             <Button
               size="lg"
               className="mt-4 h-16 w-full text-lg font-bold"
               disabled={pickingUp}
               onClick={pickup}
             >
-              Ritira ordine
+              {pickingUp ? "Conferma in corso…" : "Ho ritirato l’ordine"}
             </Button>
           </div>
         )}
@@ -109,36 +167,34 @@ function OrderPage() {
           <div className="rounded-3xl border border-border bg-card p-6 text-center">
             <CheckCircle2 className="mx-auto size-10 text-success" />
             <h1 className="mt-2 font-display text-2xl font-bold">Ordine ritirato</h1>
-            <p className="mt-1 text-muted-foreground">Buon appetito!</p>
+            <p className="mt-1 text-muted-foreground">Ritiro confermato. Buon appetito!</p>
             <Button asChild variant="outline" className="mt-4">
               <Link to="/">Nuovo ordine</Link>
             </Button>
           </div>
         )}
 
-        {!isReady && !isPickedUp && (
+        {order.status === "received" && (
           <div className="rounded-3xl border border-border bg-card p-6 text-center">
             <ChefHat className="mx-auto size-10 text-primary" />
             <h1 className="mt-2 font-display text-2xl font-bold">{STATUS_LABEL[order.status]}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Lo stato si aggiorna da solo: tieni aperta questa pagina.
+              La cucina prenderà in carico il tuo ordine a breve.
             </p>
           </div>
         )}
 
         <ol className="flex items-center gap-2">
-          {STEPS.map((s, i) => (
-            <li key={s} className="flex-1 text-center">
+          {STEPS.map((status, index) => (
+            <li key={status} className="flex-1 text-center">
               <div
-                className={`h-2 rounded-full ${i <= stepIndex ? "bg-primary" : "bg-muted"}`}
+                className={`h-2 rounded-full ${index <= stepIndex ? "bg-primary" : "bg-muted"}`}
                 aria-hidden
               />
               <p
-                className={`mt-1.5 text-[11px] font-medium ${
-                  i <= stepIndex ? "text-foreground" : "text-muted-foreground"
-                }`}
+                className={`mt-1.5 text-[11px] font-medium ${index <= stepIndex ? "text-foreground" : "text-muted-foreground"}`}
               >
-                {STATUS_LABEL[s]}
+                {STATUS_LABEL[status]}
               </p>
             </li>
           ))}
