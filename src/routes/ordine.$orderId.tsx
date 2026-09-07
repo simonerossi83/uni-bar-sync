@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, ChefHat, Clock, PartyPopper, Timer } from "lucide-react";
 import { toast } from "sonner";
 
@@ -9,11 +9,13 @@ import {
   STATUS_LABEL,
   fetchOrder,
   fetchOrderStatus,
+  hasDirectOrderAccess,
   formatPrice,
   formatTime,
   pickupOrder,
   type OrderStatus,
 } from "@/lib/bar";
+import { orderPollingInterval } from "@/lib/traffic-policy";
 
 export const Route = createFileRoute("/ordine/$orderId")({
   head: () => ({
@@ -57,6 +59,7 @@ function OrderPage() {
   const { orderId } = Route.useParams();
   const queryClient = useQueryClient();
   const [pickingUp, setPickingUp] = useState(false);
+  const pickingUpRef = useRef(false);
   const pollingJitter = useMemo(() => Math.floor(Math.random() * 1_500), []);
   const { data: baseOrder, isLoading } = useQuery({
     queryKey: ["order", orderId],
@@ -64,16 +67,13 @@ function OrderPage() {
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
   });
-  const { data: liveStatus } = useQuery({
+  const { data: liveStatus, isError: statusError } = useQuery({
     queryKey: ["order-status", orderId],
     queryFn: () => fetchOrderStatus(orderId),
     enabled: Boolean(baseOrder),
     staleTime: 1_500,
-    refetchInterval: (query) => {
-      const snapshot = query.state.data;
-      if (!snapshot || snapshot.status === "picked_up") return false;
-      return snapshot.status === "preparing" ? 3_000 + pollingJitter : 4_500 + pollingJitter;
-    },
+    refetchInterval: (query) =>
+      orderPollingInterval(query.state.data, pollingJitter, hasDirectOrderAccess(orderId)),
     refetchIntervalInBackground: false,
   });
   const order = baseOrder && liveStatus ? { ...baseOrder, ...liveStatus } : baseOrder;
@@ -102,16 +102,20 @@ function OrderPage() {
   const stepIndex = STEPS.indexOf(order.status);
 
   const pickup = async () => {
-    if (pickingUp || !isReady) return;
+    if (pickingUpRef.current || !isReady) return;
+    pickingUpRef.current = true;
     setPickingUp(true);
     try {
       const updated = await pickupOrder(order.id);
+      await queryClient.cancelQueries({ queryKey: ["order-status", orderId] });
       queryClient.setQueryData(["order", orderId], updated);
       queryClient.setQueryData(["order-status", orderId], updated);
-      toast.success("Ritiro confermato");
+      if (updated.status === "picked_up") toast.success("Ritiro confermato");
+      else toast.info("La cucina ha aggiornato lo stato dell’ordine. Attendi che sia pronto.");
     } catch {
       toast.error("Non è stato possibile confermare il ritiro. Riprova.");
     } finally {
+      pickingUpRef.current = false;
       setPickingUp(false);
     }
   };
@@ -119,6 +123,11 @@ function OrderPage() {
   return (
     <div className="min-h-screen bg-background pb-10">
       <div className="mx-auto max-w-xl space-y-5 p-4">
+        {statusError && (
+          <p role="alert" className="rounded-xl bg-warning/15 p-3 text-sm">
+            Connessione momentaneamente instabile. Aggiornamento dello stato in corso…
+          </p>
+        )}
         <div
           className="animate-pop-in rounded-3xl p-6 text-center text-primary-foreground shadow-[var(--shadow-soft)]"
           style={{ backgroundImage: isReady ? "var(--gradient-ready)" : "var(--gradient-primary)" }}

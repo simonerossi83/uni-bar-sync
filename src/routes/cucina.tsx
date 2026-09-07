@@ -1,6 +1,6 @@
 import { createFileRoute, Link, redirect, useNavigate, useRouter } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArchiveX, Flame, LogOut, PackageOpen, RefreshCcw, Timer, Utensils } from "lucide-react";
 import { toast } from "sonner";
 
@@ -19,7 +19,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   endKitchenSession,
-  fetchMenu,
+  EMPTY_KITCHEN_PAGES,
+  KITCHEN_PAGE_SIZE,
   fetchOrders,
   formatTime,
   getKitchenAuthStatus,
@@ -28,7 +29,9 @@ import {
   setItemAvailability,
   setKitchenOrderStatus,
   type Order,
+  type OrderStatus,
 } from "@/lib/bar";
+import { useMenu } from "@/hooks/use-menu";
 
 const BATCH_SECONDS = 10;
 
@@ -45,31 +48,54 @@ function KitchenPage() {
   const queryClient = useQueryClient();
   const router = useRouter();
   const navigate = useNavigate();
-  const orderRefreshMs = useMemo(() => 1_800 + Math.floor(Math.random() * 700), []);
-  const menuRefreshMs = useMemo(() => 4_000 + Math.floor(Math.random() * 2_000), []);
-  const { data: orders = [] } = useQuery({
-    queryKey: ["orders"],
-    queryFn: fetchOrders,
+  const orderRefreshMs = useMemo(() => 3_000 + Math.floor(Math.random() * 1_000), []);
+  const [pages, setPages] = useState(EMPTY_KITCHEN_PAGES);
+  const [includeHistory, setIncludeHistory] = useState(false);
+  const {
+    data: queues,
+    isError: ordersError,
+    isLoading: loadingOrders,
+  } = useQuery({
+    queryKey: ["orders", pages, includeHistory],
+    queryFn: () => fetchOrders(pages, includeHistory),
     refetchInterval: orderRefreshMs,
     refetchIntervalInBackground: false,
   });
-  const { data: menu = [] } = useQuery({
-    queryKey: ["menu"],
-    queryFn: fetchMenu,
-    staleTime: 2_000,
-    refetchInterval: menuRefreshMs,
-    refetchIntervalInBackground: false,
-  });
+  const { data: menu, isError: menuError } = useMenu(true);
+  useEffect(() => {
+    if (!queues) return;
+    setPages((current) => {
+      const next = { ...current };
+      for (const status of Object.keys(current) as OrderStatus[]) {
+        next[status] = Math.min(
+          current[status],
+          Math.max(0, Math.ceil(queues[status].count / KITCHEN_PAGE_SIZE) - 1),
+        );
+      }
+      return (Object.keys(current) as OrderStatus[]).some(
+        (status) => next[status] !== current[status],
+      )
+        ? next
+        : current;
+    });
+  }, [queues]);
 
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
   const [restoringStock, setRestoringStock] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
-  const received = orders.filter((order) => order.status === "received");
-  const preparing = orders.filter((order) => order.status === "preparing");
-  const ready = orders.filter((order) => order.status === "ready");
-  const pickedUp = orders.filter((order) => order.status === "picked_up");
+  const received = queues?.received.orders ?? [];
+  const preparing = queues?.preparing.orders ?? [];
+  const ready = queues?.ready.orders ?? [];
+  const total = queues ? Object.values(queues).reduce((sum, queue) => sum + queue.count, 0) : 0;
+  const pager = (status: OrderStatus) => (
+    <QueuePagination
+      page={pages[status]}
+      count={queues?.[status].count ?? 0}
+      onChange={(page) => setPages((current) => ({ ...current, [status]: page }))}
+    />
+  );
 
   const changeStatus = async (order: Order, status: "preparing" | "ready") => {
     if (busyOrderId) return;
@@ -98,7 +124,18 @@ function KitchenPage() {
     setResetting(true);
     try {
       await resetOrders();
-      queryClient.setQueryData(["orders"], []);
+      await queryClient.cancelQueries({ queryKey: ["orders"] });
+      queryClient.setQueriesData(
+        { queryKey: ["orders"] },
+        {
+          received: { orders: [], count: 0 },
+          preparing: { orders: [], count: 0 },
+          ready: { orders: [], count: 0 },
+          picked_up: { orders: [], count: 0 },
+        },
+      );
+      setPages(EMPTY_KITCHEN_PAGES);
+      await queryClient.invalidateQueries({ queryKey: ["orders"] });
       toast.success("Ordini archiviati");
     } catch {
       toast.error("Non è stato possibile azzerare gli ordini");
@@ -161,8 +198,8 @@ function KitchenPage() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Azzerare gli ordini?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  Gli ordini attualmente visibili verranno archiviati e rimossi dalla dashboard. I
-                  dati non saranno cancellati definitivamente.
+                  Tutti gli ordini, comprese le altre pagine e quelli ritirati, verranno archiviati
+                  e rimossi dalla dashboard. I dati non saranno cancellati definitivamente.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -180,18 +217,27 @@ function KitchenPage() {
       </header>
 
       <section className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-5">
-        <Stat label="Ordini totali" value={orders.length} />
-        <Stat label="Nuovi" value={received.length} />
-        <Stat label="In preparazione" value={preparing.length} />
-        <Stat label="Pronti" value={ready.length} />
-        <Stat label="Ritirati" value={pickedUp.length} />
+        <Stat label="Ordini totali" value={total} />
+        <Stat label="Nuovi" value={queues?.received.count ?? 0} />
+        <Stat label="In preparazione" value={queues?.preparing.count ?? 0} />
+        <Stat label="Pronti" value={queues?.ready.count ?? 0} />
+        <Stat label="Ritirati" value={queues?.picked_up.count ?? 0} />
       </section>
+      {(ordersError || menuError) && (
+        <p role="alert" className="mb-4 rounded-xl bg-warning/20 p-3">
+          Aggiornamento non riuscito. Controlla la connessione; i dati visualizzati potrebbero non
+          essere aggiornati.
+        </p>
+      )}
+      {loadingOrders && <p className="mb-4">Caricamento ordini…</p>}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Column
           title="Nuovi ordini"
           icon={<Utensils className="size-6" />}
           orders={received}
+          count={queues?.received.count ?? 0}
+          pagination={pager("received")}
           actionLabel="Avvia preparazione"
           busyOrderId={busyOrderId}
           onAction={(order) => changeStatus(order, "preparing")}
@@ -202,6 +248,8 @@ function KitchenPage() {
           title="In preparazione"
           icon={<Flame className="size-6" />}
           orders={preparing}
+          count={queues?.preparing.count ?? 0}
+          pagination={pager("preparing")}
           actionLabel="Segna pronto"
           busyOrderId={busyOrderId}
           onAction={(order) => changeStatus(order, "ready")}
@@ -229,8 +277,37 @@ function KitchenPage() {
               </div>
             ))}
           </div>
+          {pager("ready")}
         </div>
       </div>
+
+      <section className="mt-6 rounded-3xl border border-border bg-card/40 p-5">
+        <Button
+          variant="outline"
+          onClick={() => setIncludeHistory((value) => !value)}
+          aria-expanded={includeHistory}
+        >
+          {includeHistory ? "Nascondi ordini ritirati" : "Mostra ordini ritirati"} (
+          {queues?.picked_up.count ?? 0})
+        </Button>
+        {includeHistory && (
+          <>
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              {(queues?.picked_up.orders ?? []).map((order) => (
+                <article key={order.id} className="rounded-xl bg-card p-3">
+                  <p className="font-bold">
+                    #{order.order_number} · {formatTime(order.created_at)}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {order.order_items?.map((item) => `${item.quantity}× ${item.name}`).join(", ")}
+                  </p>
+                </article>
+              ))}
+            </div>
+            {pager("picked_up")}
+          </>
+        )}
+      </section>
 
       <section className="mt-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -321,10 +398,43 @@ function Stat({ label, value }: { label: string; value: number }) {
   );
 }
 
+function QueuePagination({
+  page,
+  count,
+  onChange,
+}: {
+  page: number;
+  count: number;
+  onChange: (page: number) => void;
+}) {
+  const pageCount = Math.max(1, Math.ceil(count / KITCHEN_PAGE_SIZE));
+  if (pageCount === 1 && page === 0) return null;
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-sm">
+      <Button variant="outline" size="sm" disabled={page === 0} onClick={() => onChange(page - 1)}>
+        Precedenti
+      </Button>
+      <span>
+        Pagina {page + 1} / {pageCount} · {count} ordini
+      </span>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={page + 1 >= pageCount}
+        onClick={() => onChange(page + 1)}
+      >
+        Successivi
+      </Button>
+    </div>
+  );
+}
+
 function Column({
   title,
   icon,
   orders,
+  count,
+  pagination,
   actionLabel,
   busyOrderId,
   onAction,
@@ -334,6 +444,8 @@ function Column({
   title: string;
   icon: React.ReactNode;
   orders: Order[];
+  count: number;
+  pagination: React.ReactNode;
   actionLabel: string;
   busyOrderId: string | null;
   onAction: (order: Order) => void;
@@ -343,7 +455,7 @@ function Column({
   return (
     <div className="rounded-3xl border border-border bg-card/40 p-5">
       <h2 className="flex items-center gap-2 font-display text-2xl font-bold">
-        {icon} {title} <span className="text-muted-foreground">({orders.length})</span>
+        {icon} {title} <span className="text-muted-foreground">({count})</span>
       </h2>
       <div className="mt-4 space-y-3">
         {orders.length === 0 && <p className="text-muted-foreground">Nessun ordine.</p>}
@@ -388,6 +500,7 @@ function Column({
           </article>
         ))}
       </div>
+      {pagination}
     </div>
   );
 }

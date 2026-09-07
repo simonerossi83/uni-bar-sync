@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Minus, Plus, ShoppingBag, Trash2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -11,12 +11,14 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/co
 import {
   CATEGORIES,
   MAX_ORDER_QUANTITY,
+  MAX_ITEM_QUANTITY,
+  OrderRateLimitError,
   createOrder,
-  fetchMenu,
   formatPrice,
   type MenuItem,
   type Order,
 } from "@/lib/bar";
+import { useMenu } from "@/hooks/use-menu";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -44,17 +46,15 @@ function Index() {
   const [note, setNote] = useState("");
   const [category, setCategory] = useState<string>(CATEGORIES[0]);
   const [sending, setSending] = useState(false);
+  const [retryIn, setRetryIn] = useState(0);
+  useEffect(() => {
+    if (retryIn <= 0) return;
+    const timer = window.setTimeout(() => setRetryIn((value) => Math.max(0, value - 1)), 1000);
+    return () => window.clearTimeout(timer);
+  }, [retryIn]);
   const sendingRef = useRef(false);
   const requestIdRef = useRef<string | null>(null);
-  const menuRefreshMs = useMemo(() => 15_000 + Math.floor(Math.random() * 10_000), []);
-
-  const { data: menu = [], isLoading } = useQuery({
-    queryKey: ["menu"],
-    queryFn: fetchMenu,
-    staleTime: 10_000,
-    refetchInterval: menuRefreshMs,
-    refetchIntervalInBackground: false,
-  });
+  const { data: menu, isLoading, isError } = useMenu();
 
   const byId = useMemo(() => new Map(menu.map((m) => [m.id, m])), [menu]);
   const lines = useMemo(
@@ -74,6 +74,7 @@ function Index() {
       if (
         !item.available ||
         quantity >= item.stock_quantity ||
+        quantity >= MAX_ITEM_QUANTITY ||
         currentCount >= MAX_ORDER_QUANTITY
       ) {
         return current;
@@ -93,7 +94,7 @@ function Index() {
     });
 
   const submit = async () => {
-    if (sendingRef.current) return;
+    if (sendingRef.current || retryIn > 0) return;
     if (lines.length === 0) {
       toast.error("Il carrello è vuoto o contiene solo prodotti esauriti");
       return;
@@ -128,9 +129,14 @@ function Index() {
       setCart({});
       setNote("");
       navigate({ to: "/ordine/$orderId", params: { orderId: order.id } });
-    } catch {
+    } catch (error) {
+      if (error instanceof OrderRateLimitError) setRetryIn(error.retryAfterSeconds);
       await queryClient.invalidateQueries({ queryKey: ["menu"] });
-      toast.error("Non è stato possibile inviare l'ordine. Riprova.");
+      toast.error(
+        error instanceof OrderRateLimitError
+          ? error.message
+          : "Non è stato possibile inviare l'ordine. Riprova.",
+      );
     } finally {
       sendingRef.current = false;
       setSending(false);
@@ -166,6 +172,12 @@ function Index() {
       </header>
 
       <main className="mx-auto max-w-2xl space-y-3 px-4 py-4">
+        {isError && (
+          <p role="alert" className="rounded-xl bg-warning/15 p-3 text-sm">
+            Connessione momentaneamente instabile. Le disponibilità saranno aggiornate appena
+            possibile.
+          </p>
+        )}
         {isLoading && (
           <p className="py-10 text-center text-sm text-muted-foreground">Carico il menu…</p>
         )}
@@ -206,7 +218,11 @@ function Index() {
                     <Button
                       size="icon"
                       onClick={() => add(item)}
-                      disabled={qty >= item.stock_quantity || count >= MAX_ORDER_QUANTITY}
+                      disabled={
+                        qty >= item.stock_quantity ||
+                        qty >= MAX_ITEM_QUANTITY ||
+                        count >= MAX_ORDER_QUANTITY
+                      }
                     >
                       <Plus className="size-4" />
                     </Button>
@@ -265,6 +281,7 @@ function Index() {
                         disabled={
                           !l.item.available ||
                           l.quantity >= l.item.stock_quantity ||
+                          l.quantity >= MAX_ITEM_QUANTITY ||
                           count >= MAX_ORDER_QUANTITY
                         }
                       >
@@ -280,15 +297,18 @@ function Index() {
                     onChange={(e) => setNote(e.target.value)}
                     placeholder="Nota per la cucina (opzionale): es. senza zucchero"
                     rows={2}
+                    maxLength={500}
                   />
                   <Button
                     size="lg"
                     className="h-14 w-full text-base"
-                    disabled={sending}
+                    disabled={sending || retryIn > 0}
                     onClick={submit}
                   >
                     {sending && <Loader2 className="size-5 animate-spin" />}
-                    Conferma ordine · {formatPrice(total)}
+                    {retryIn > 0
+                      ? `Riprova tra ${retryIn} s`
+                      : `Conferma ordine · ${formatPrice(total)}`}
                   </Button>
                 </div>
               </SheetContent>

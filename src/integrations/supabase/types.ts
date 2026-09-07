@@ -121,6 +121,7 @@ export type Database = {
           archived_at: string | null;
           client_request_id: string | null;
           created_at: string;
+          customer_access_hash: string | null;
           estimated_ready_at: string | null;
           id: string;
           note: string | null;
@@ -133,6 +134,7 @@ export type Database = {
           archived_at?: string | null;
           client_request_id?: string | null;
           created_at?: string;
+          customer_access_hash?: string | null;
           estimated_ready_at?: string | null;
           id?: string;
           note?: string | null;
@@ -145,6 +147,7 @@ export type Database = {
           archived_at?: string | null;
           client_request_id?: string | null;
           created_at?: string;
+          customer_access_hash?: string | null;
           estimated_ready_at?: string | null;
           id?: string;
           note?: string | null;
@@ -178,6 +181,25 @@ export type Database = {
           updated_at: string;
         }[];
       };
+      create_bar_order_secured: {
+        Args: {
+          p_client_request_id: string;
+          p_customer_access_hash: string;
+          p_lines: Json;
+          p_note: string | null;
+        };
+        Returns: {
+          archived_at: string | null;
+          created_at: string;
+          estimated_ready_at: string | null;
+          id: string;
+          note: string | null;
+          order_number: number;
+          status: string;
+          total: number;
+          updated_at: string;
+        }[];
+      };
       consume_rate_limit: {
         Args: {
           p_identifier_hash: string;
@@ -188,6 +210,16 @@ export type Database = {
         Returns: {
           allowed: boolean;
           retry_after_seconds: number;
+        }[];
+      };
+      get_customer_order_status: {
+        Args: { p_access_token: string; p_order_id: string };
+        Returns: {
+          archived_at: string | null;
+          estimated_ready_at: string | null;
+          id: string;
+          status: string;
+          updated_at: string;
         }[];
       };
       restore_menu_stock: {

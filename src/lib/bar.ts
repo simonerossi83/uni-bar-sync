@@ -1,6 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
+import { supabase } from "@/integrations/supabase/client";
+
 export type OrderStatus = "received" | "preparing" | "ready" | "picked_up";
 
 export type MenuItem = {
@@ -41,8 +43,20 @@ export type OrderStatusSnapshot = Pick<
   "id" | "status" | "updated_at" | "estimated_ready_at" | "archived_at"
 >;
 
+export { KITCHEN_PAGE_SIZE } from "@/lib/traffic-policy";
+export type KitchenPages = Record<OrderStatus, number>;
+export type KitchenOrderPage = { orders: Order[]; count: number };
+export type KitchenOrders = Record<OrderStatus, KitchenOrderPage>;
+export const EMPTY_KITCHEN_PAGES: KitchenPages = {
+  received: 0,
+  preparing: 0,
+  ready: 0,
+  picked_up: 0,
+};
+
 export const CATEGORIES = ["Caffetteria", "Bevande", "Panini", "Snack", "Dolci"] as const;
 export const MAX_ORDER_QUANTITY = 30;
+export const MAX_ITEM_QUANTITY = 20;
 
 export const STATUS_LABEL: Record<OrderStatus, string> = {
   received: "Ordine ricevuto",
@@ -62,7 +76,12 @@ const createOrderSchema = z
   .object({
     requestId: uuidSchema,
     lines: z
-      .array(z.object({ menuItemId: uuidSchema, quantity: z.number().int().min(1).max(20) }))
+      .array(
+        z.object({
+          menuItemId: uuidSchema,
+          quantity: z.number().int().min(1).max(MAX_ITEM_QUANTITY),
+        }),
+      )
       .min(1)
       .max(50),
     note: z.string().max(500),
@@ -78,6 +97,16 @@ const createOrderSchema = z
     }
   });
 const orderIdSchema = z.object({ orderId: uuidSchema });
+const pageSchema = z.number().int().min(0).max(10_000);
+const kitchenPagesSchema = z.object({
+  pages: z.object({
+    received: pageSchema,
+    preparing: pageSchema,
+    ready: pageSchema,
+    picked_up: pageSchema,
+  }),
+  includeHistory: z.boolean(),
+});
 const kitchenStatusSchema = z.object({
   orderId: uuidSchema,
   status: z.enum(["preparing", "ready"]),
@@ -92,14 +121,25 @@ const createOrderServer = createServerFn({ method: "POST" })
   .validator(createOrderSchema)
   .handler(async ({ data }) => {
     const { createCustomerOrder } = await import("@/lib/bar.server");
-    return createCustomerOrder(data);
+    try {
+      return { ok: true as const, ...(await createCustomerOrder(data)) };
+    } catch (error) {
+      // Expected throttling must survive server-function error serialization.
+      const failure = error as {
+        statusCode?: number;
+        retryAfterSeconds?: number;
+        message?: string;
+      };
+      if (failure.statusCode !== 429) throw error;
+      return { ok: false as const, retryAfterSeconds: failure.retryAfterSeconds ?? 60 };
+    }
   });
 
 const fetchOrderServer = createServerFn({ method: "GET" })
   .validator(orderIdSchema)
   .handler(async ({ data }) => {
-    const { getCustomerOrder } = await import("@/lib/bar.server");
-    return getCustomerOrder(data.orderId);
+    const { getCustomerOrderWithAccess } = await import("@/lib/bar.server");
+    return getCustomerOrderWithAccess(data.orderId);
   });
 
 const fetchOrderStatusServer = createServerFn({ method: "GET" })
@@ -116,10 +156,12 @@ const pickupOrderServer = createServerFn({ method: "POST" })
     return pickupCustomerOrder(data.orderId);
   });
 
-const fetchKitchenOrdersServer = createServerFn({ method: "GET" }).handler(async () => {
-  const { getKitchenOrders } = await import("@/lib/bar.server");
-  return getKitchenOrders();
-});
+const fetchKitchenOrdersServer = createServerFn({ method: "GET" })
+  .validator(kitchenPagesSchema)
+  .handler(async ({ data }) => {
+    const { getKitchenOrders } = await import("@/lib/bar.server");
+    return getKitchenOrders(data.pages, data.includeHistory);
+  });
 
 const updateKitchenStatusServer = createServerFn({ method: "POST" })
   .validator(kitchenStatusSchema)
@@ -163,41 +205,97 @@ const kitchenLogoutServer = createServerFn({ method: "POST" }).handler(async () 
   return { authenticated: false };
 });
 
-const fetchMenuServer = createServerFn({ method: "GET" }).handler(async () => {
-  const { getPublicMenu } = await import("@/lib/bar.server");
-  return getPublicMenu();
-});
+const orderAccessKey = (orderId: string) => `uni_bar_order_access:${orderId}`;
+const orderAccessMemory = new Map<string, string>();
 
-export function fetchMenu(): Promise<MenuItem[]> {
-  return fetchMenuServer();
+function saveOrderAccess(orderId: string, accessToken: string) {
+  if (typeof window === "undefined") return;
+  // Private browsing/storage restrictions must not turn every poll into a Worker call.
+  orderAccessMemory.set(orderId, accessToken);
+  if (orderAccessMemory.size > 20) orderAccessMemory.delete(orderAccessMemory.keys().next().value!);
+  try {
+    window.localStorage.setItem(orderAccessKey(orderId), accessToken);
+  } catch {
+    // Signed server session remains the secure fallback when storage is unavailable.
+  }
+}
+
+function readOrderAccess(orderId: string) {
+  if (typeof window === "undefined") return null;
+  const cached = orderAccessMemory.get(orderId);
+  if (cached) return cached;
+  try {
+    return window.localStorage.getItem(orderAccessKey(orderId));
+  } catch {
+    return null;
+  }
+}
+
+export const hasDirectOrderAccess = (orderId: string) => Boolean(readOrderAccess(orderId));
+
+export async function fetchMenu(): Promise<MenuItem[]> {
+  const { data, error } = await supabase
+    .from("menu_items")
+    .select(
+      "id, name, description, price, category, available, initial_stock, stock_quantity, sort_order",
+    )
+    .order("category")
+    .order("sort_order");
+  if (error) throw error;
+  return (data ?? []) as MenuItem[];
+}
+
+export async function fetchMenuStock() {
+  const { data, error } = await supabase.from("menu_items").select("id, available, stock_quantity");
+  if (error) throw error;
+  return data ?? [];
+}
+
+export class OrderRateLimitError extends Error {
+  constructor(public retryAfterSeconds: number) {
+    super(`Troppi tentativi. Attendi ${retryAfterSeconds} secondi prima di riprovare.`);
+  }
 }
 
 export type CartLine = { item: MenuItem; quantity: number };
 
-export function createOrder(lines: CartLine[], note: string, requestId: string) {
-  return createOrderServer({
+export async function createOrder(lines: CartLine[], note: string, requestId: string) {
+  const created = await createOrderServer({
     data: {
       requestId,
       lines: lines.map((line) => ({ menuItemId: line.item.id, quantity: line.quantity })),
       note,
     },
   });
+  if (!created.ok) throw new OrderRateLimitError(created.retryAfterSeconds);
+  saveOrderAccess(created.order.id, created.accessToken);
+  return created.order;
 }
 
-export function fetchOrder(orderId: string) {
-  return fetchOrderServer({ data: { orderId } });
+export async function fetchOrder(orderId: string) {
+  const result = await fetchOrderServer({ data: { orderId } });
+  if (result?.accessToken) saveOrderAccess(orderId, result.accessToken);
+  return result?.order ?? null;
 }
 
-export function fetchOrderStatus(orderId: string) {
-  return fetchOrderStatusServer({ data: { orderId } });
+export async function fetchOrderStatus(orderId: string) {
+  const accessToken = readOrderAccess(orderId);
+  if (!accessToken) return fetchOrderStatusServer({ data: { orderId } });
+
+  const { data, error } = await supabase.rpc("get_customer_order_status", {
+    p_order_id: orderId,
+    p_access_token: accessToken,
+  });
+  if (error) throw error;
+  return (data?.[0] as OrderStatusSnapshot | undefined) ?? null;
 }
 
 export function pickupOrder(orderId: string) {
   return pickupOrderServer({ data: { orderId } });
 }
 
-export function fetchOrders() {
-  return fetchKitchenOrdersServer();
+export function fetchOrders(pages: KitchenPages, includeHistory: boolean) {
+  return fetchKitchenOrdersServer({ data: { pages, includeHistory } });
 }
 
 export function setKitchenOrderStatus(orderId: string, status: "preparing" | "ready") {
