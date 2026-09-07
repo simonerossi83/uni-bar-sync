@@ -51,7 +51,8 @@ export function databaseClient(db: PGlite) {
         end: number | undefined;
       let order = "",
         single = false,
-        update: Record<string, unknown> | undefined;
+        update: Record<string, unknown> | undefined,
+        insert: Record<string, unknown> | undefined;
       const filter = (column: string, value: unknown, operator: string) => {
         if (operator === "IS") conditions.push(`o.${identifier(column)} IS NULL`);
         else {
@@ -69,6 +70,9 @@ export function databaseClient(db: PGlite) {
         },
         eq(column: string, value: unknown) {
           return filter(column, value, "=");
+        },
+        gt(column: string, value: unknown) {
+          return filter(column, value, ">");
         },
         is(column: string, value: unknown) {
           return filter(column, value, "IS");
@@ -88,6 +92,10 @@ export function databaseClient(db: PGlite) {
         },
         update(data: Record<string, unknown>) {
           update = data;
+          return builder;
+        },
+        insert(data: Record<string, unknown>) {
+          insert = data;
           return builder;
         },
         then(resolve: (result: unknown) => unknown, reject: (error: unknown) => unknown) {
@@ -117,7 +125,14 @@ export function databaseClient(db: PGlite) {
             })
             .join(",");
           let sql: string;
-          if (update) {
+          if (insert) {
+            const keys = Object.keys(insert);
+            const placeholders = Object.values(insert).map((value) => {
+              values.push(value);
+              return `$${values.length}`;
+            });
+            sql = `INSERT INTO public.${identifier(table)} AS o (${keys.map(identifier).join(",")}) VALUES (${placeholders.join(",")}) RETURNING ${columns}`;
+          } else if (update) {
             const sets = Object.entries(update).map(([key, value]) => {
               values.push(value);
               return `${identifier(key)} = $${values.length}`;

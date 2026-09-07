@@ -1,6 +1,7 @@
 import { getRequest, getRequestIP, setResponseHeader } from "@tanstack/react-start/server";
 
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { httpError } from "@/lib/http-error.server";
 
 type RateLimitOptions = {
   scope: string;
@@ -12,13 +13,13 @@ type RateLimitOptions = {
 
 function rateLimitError(retryAfterSeconds: number, message: string) {
   setResponseHeader("retry-after", String(retryAfterSeconds));
-  throw Object.assign(new Error(message), { statusCode: 429, retryAfterSeconds });
+  throw Object.assign(httpError(429, message), { retryAfterSeconds });
 }
 
 async function hashIdentifier(scope: string, identifier: string) {
   const secret = process.env["KITCHEN_SESSION_SECRET"];
   if (!secret || secret.length < 32) {
-    throw Object.assign(new Error("Rate limiting non configurato"), { statusCode: 500 });
+    throw httpError(500, "Rate limiting non configurato");
   }
   const { createHmac } = await import("node:crypto");
   return createHmac("sha256", secret)
@@ -45,10 +46,10 @@ export async function enforceRateLimit(options: RateLimitOptions) {
     p_window_seconds: options.windowSeconds,
     p_max_requests: options.maxRequests,
   });
-  if (error) throw error;
+  if (error) throw httpError(503, "Rate limiting temporaneamente non disponibile");
   const result = data?.[0];
   if (!result) {
-    throw Object.assign(new Error("Rate limiting non disponibile"), { statusCode: 503 });
+    throw httpError(503, "Rate limiting non disponibile");
   }
   if (!result.allowed) {
     rateLimitError(Math.max(1, result.retry_after_seconds), options.message);

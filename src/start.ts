@@ -19,33 +19,13 @@ const errorMiddleware = createMiddleware().server(async ({ next }) => {
 });
 
 const securityHeadersMiddleware = createMiddleware().server(async ({ next }) => {
+  const { applySecurityHeaders, getCspNonce } = await import("./lib/security-headers.server");
+  const request = getRequest();
+  const nonce = getCspNonce(request);
   const result = await next();
   const response = result.response;
   if (!(response instanceof Response)) return result;
-
-  response.headers.set(
-    "content-security-policy",
-    "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
-  );
-  response.headers.set("x-frame-options", "DENY");
-  response.headers.set("x-content-type-options", "nosniff");
-  response.headers.set("referrer-policy", "strict-origin-when-cross-origin");
-  response.headers.set("permissions-policy", "camera=(), microphone=(), geolocation=()");
-
-  const pathname = new URL(getRequest().url).pathname;
-  const sensitiveResponse =
-    pathname.startsWith("/cucina") ||
-    pathname.startsWith("/ordine/") ||
-    pathname.startsWith("/_serverFn/") ||
-    response.headers.has("set-cookie");
-  if (sensitiveResponse) {
-    response.headers.set("cache-control", "no-store");
-    response.headers.set("pragma", "no-cache");
-  }
-  if (process.env["NODE_ENV"] === "production") {
-    response.headers.set("strict-transport-security", "max-age=31536000");
-  }
-
+  applySecurityHeaders(response, request, nonce);
   return result;
 });
 

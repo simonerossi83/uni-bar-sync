@@ -35,6 +35,7 @@ vi.mock("@tanstack/react-start/server", () => ({
     new Request("https://isolated.invalid", { headers: { "cf-connecting-ip": "192.0.2.10" } }),
   getRequestIP: () => "192.0.2.10",
   setResponseHeader: vi.fn(),
+  setResponseStatus: vi.fn(),
 }));
 import {
   archiveKitchenOrders,

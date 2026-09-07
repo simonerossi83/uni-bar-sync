@@ -166,6 +166,8 @@ function KitchenPage() {
       queryClient.removeQueries({ queryKey: ["orders"] });
       await router.invalidate();
       await navigate({ to: "/cucina/login", replace: true });
+    } catch {
+      toast.error("Logout non riuscito. La sessione non è stata chiusa: riprova.");
     } finally {
       setLoggingOut(false);
     }

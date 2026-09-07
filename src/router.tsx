@@ -1,8 +1,17 @@
 import { QueryClient } from "@tanstack/react-query";
 import { createRouter } from "@tanstack/react-router";
+import { createIsomorphicFn } from "@tanstack/react-start";
 import { routeTree } from "./routeTree.gen";
 
-export const getRouter = () => {
+const requestNonce = createIsomorphicFn()
+  .server(async () => {
+    const { getCspNonce } = await import("./lib/security-headers.server");
+    return getCspNonce();
+  })
+  .client(() => undefined);
+
+export const getRouter = async () => {
+  const nonce = await requestNonce();
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: {
@@ -16,6 +25,9 @@ export const getRouter = () => {
   });
 
   const router = createRouter({
+    // HeadContent, Scripts and streaming SSR all consume this built-in option.
+    // Client hydration restores it from TanStack's csp-nonce meta element.
+    ssr: nonce ? { nonce } : {},
     routeTree,
     context: { queryClient },
     scrollRestoration: true,

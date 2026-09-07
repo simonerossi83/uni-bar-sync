@@ -11,17 +11,18 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/bar.server", () => mocks);
 vi.mock("@/integrations/supabase/client", () => ({ supabase: { rpc: mocks.rpc } }));
+vi.mock("@tanstack/react-start/server", () => ({ setResponseStatus: vi.fn() }));
 vi.mock("@tanstack/react-start", () => ({
   createServerFn: () => {
-    let schema: ZodTypeAny | undefined;
+    let schema: ZodTypeAny | ((input: unknown) => Promise<unknown>) | undefined;
     return {
-      validator(value: ZodTypeAny) {
+      validator(value: ZodTypeAny | ((input: unknown) => Promise<unknown>)) {
         schema = value;
         return this;
       },
       handler(handler: (args: { data: unknown }) => unknown) {
         return async (args?: { data: unknown }) =>
-          handler({ data: schema ? schema.parse(args?.data) : args?.data });
+          handler({ data: schema ? (typeof schema === "function" ? await schema(args?.data) : schema.parse(args?.data)) : args?.data });
       },
     };
   },

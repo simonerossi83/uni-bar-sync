@@ -117,8 +117,19 @@ const loginSchema = z.object({
   password: z.string().min(1).max(200),
 });
 
+function validateServerInput<T extends z.ZodTypeAny>(schema: T) {
+  return async (input: unknown): Promise<z.output<T>> => {
+    const result = schema.safeParse(input);
+    if (!result.success) {
+      const { httpError } = await import("@/lib/http-error.server");
+      throw httpError(400, "Richiesta non valida");
+    }
+    return result.data;
+  };
+}
+
 const createOrderServer = createServerFn({ method: "POST" })
-  .validator(createOrderSchema)
+  .validator(validateServerInput(createOrderSchema))
   .handler(async ({ data }) => {
     const { createCustomerOrder } = await import("@/lib/bar.server");
     try {
@@ -136,42 +147,42 @@ const createOrderServer = createServerFn({ method: "POST" })
   });
 
 const fetchOrderServer = createServerFn({ method: "GET" })
-  .validator(orderIdSchema)
+  .validator(validateServerInput(orderIdSchema))
   .handler(async ({ data }) => {
     const { getCustomerOrderWithAccess } = await import("@/lib/bar.server");
     return getCustomerOrderWithAccess(data.orderId);
   });
 
 const fetchOrderStatusServer = createServerFn({ method: "GET" })
-  .validator(orderIdSchema)
+  .validator(validateServerInput(orderIdSchema))
   .handler(async ({ data }) => {
     const { getCustomerOrderStatus } = await import("@/lib/bar.server");
     return getCustomerOrderStatus(data.orderId);
   });
 
 const pickupOrderServer = createServerFn({ method: "POST" })
-  .validator(orderIdSchema)
+  .validator(validateServerInput(orderIdSchema))
   .handler(async ({ data }) => {
     const { pickupCustomerOrder } = await import("@/lib/bar.server");
     return pickupCustomerOrder(data.orderId);
   });
 
 const fetchKitchenOrdersServer = createServerFn({ method: "GET" })
-  .validator(kitchenPagesSchema)
+  .validator(validateServerInput(kitchenPagesSchema))
   .handler(async ({ data }) => {
     const { getKitchenOrders } = await import("@/lib/bar.server");
     return getKitchenOrders(data.pages, data.includeHistory);
   });
 
 const updateKitchenStatusServer = createServerFn({ method: "POST" })
-  .validator(kitchenStatusSchema)
+  .validator(validateServerInput(kitchenStatusSchema))
   .handler(async ({ data }) => {
     const { updateKitchenOrderStatus } = await import("@/lib/bar.server");
     return updateKitchenOrderStatus(data.orderId, data.status);
   });
 
 const setItemAvailabilityServer = createServerFn({ method: "POST" })
-  .validator(availabilitySchema)
+  .validator(validateServerInput(availabilitySchema))
   .handler(async ({ data }) => {
     const { updateMenuItemAvailability } = await import("@/lib/bar.server");
     return updateMenuItemAvailability(data.itemId, data.available);
@@ -193,7 +204,7 @@ const kitchenAuthStatusServer = createServerFn({ method: "GET" }).handler(async 
 });
 
 const kitchenLoginServer = createServerFn({ method: "POST" })
-  .validator(loginSchema)
+  .validator(validateServerInput(loginSchema))
   .handler(async ({ data }) => {
     const { loginKitchen } = await import("@/lib/kitchen-auth.server");
     return { authenticated: await loginKitchen(data.username, data.password) };

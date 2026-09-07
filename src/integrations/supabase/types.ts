@@ -8,6 +8,30 @@ export type Database = {
   };
   public: {
     Tables: {
+      kitchen_sessions: {
+        Row: {
+          session_hash: string;
+          credential_version: string;
+          created_at: string;
+          expires_at: string;
+          revoked_at: string | null;
+        };
+        Insert: {
+          session_hash: string;
+          credential_version: string;
+          created_at?: string;
+          expires_at: string;
+          revoked_at?: string | null;
+        };
+        Update: {
+          session_hash?: string;
+          credential_version?: string;
+          created_at?: string;
+          expires_at?: string;
+          revoked_at?: string | null;
+        };
+        Relationships: [];
+      };
       app_rate_limits: {
         Row: {
           identifier_hash: string;
